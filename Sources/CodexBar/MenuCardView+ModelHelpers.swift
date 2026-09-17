@@ -560,6 +560,8 @@ extension UsageMenuCardView.Model {
             AlibabaTokenPlanProviderDescriptor.primaryLabel(window: snapshot.primary) ?? input.metadata.sessionLabel
         } else if input.provider == .ollama {
             OllamaProviderDescriptor.primaryLabel(window: snapshot.primary) ?? input.metadata.sessionLabel
+        } else if input.provider == .mistral {
+            MistralProviderDescriptor.primaryLabel(window: snapshot.primary) ?? input.metadata.sessionLabel
         } else {
             input.metadata.sessionLabel
         }
@@ -937,7 +939,9 @@ extension UsageMenuCardView.Model {
             let resetText = input.provider == .sub2api && namedWindow.window.resetsAt == nil
                 ? nil
                 : resolvedResetText
-            let detailText: String? = if input.provider == .sub2api {
+            let detailText: String? = if input.provider == .sub2api
+                || (input.provider == .mistral && namedWindow.id == "mistral-monthly-plan")
+            {
                 namedWindow.window.resetDescription
             } else {
                 nil

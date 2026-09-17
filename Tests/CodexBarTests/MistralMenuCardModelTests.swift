@@ -55,6 +55,43 @@ struct MistralMenuCardModelTests {
     }
 
     @Test
+    func `mistral included API window relabels primary lane`() throws {
+        let now = Date()
+        let snapshot = UsageSnapshot(
+            primary: RateWindow(
+                usedPercent: 1.1,
+                windowMinutes: nil,
+                resetsAt: ISO8601DateParser.parse("2026-10-01T00:00:00.000Z"),
+                resetDescription: "€0.28 / €25.50 · €25.22 left"),
+            secondary: nil,
+            updatedAt: now)
+        let metadata = try #require(ProviderDefaults.metadata[.mistral])
+
+        let model = UsageMenuCardView.Model.make(.init(
+            provider: .mistral,
+            metadata: metadata,
+            snapshot: snapshot,
+            credits: nil,
+            creditsError: nil,
+            dashboardError: nil,
+            tokenSnapshot: nil,
+            tokenError: nil,
+            account: AccountInfo(email: nil, plan: nil),
+            isRefreshing: false,
+            lastError: nil,
+            usageBarsShowUsed: false,
+            resetTimeDisplayStyle: .countdown,
+            tokenCostUsageEnabled: false,
+            costSummaryInlineEnabled: true,
+            showOptionalCreditsAndExtraUsage: true,
+            hidePersonalInfo: false,
+            now: now))
+
+        let primary = try #require(model.metrics.first)
+        #expect(primary.title == "Included API")
+    }
+
+    @Test
     func `mistral credit balance renders separately from primary percent lane`() throws {
         let now = Date()
         let credits = MistralCreditsSnapshot(
@@ -164,5 +201,49 @@ struct MistralMenuCardModelTests {
         let primary = try #require(model.metrics.first)
         #expect(primary.detailText == "€1.2345 this month")
         #expect(primary.resetText?.hasPrefix("Resets") == true)
+    }
+
+    @Test
+    func `mistral monthly plan shows included amount detail`() throws {
+        let now = Date()
+        let snapshot = UsageSnapshot(
+            primary: nil,
+            secondary: nil,
+            extraRateWindows: [
+                NamedRateWindow(
+                    id: "mistral-monthly-plan",
+                    title: "Monthly Plan",
+                    window: RateWindow(
+                        usedPercent: 0,
+                        windowMinutes: nil,
+                        resetsAt: now.addingTimeInterval(3 * 24 * 60 * 60),
+                        resetDescription: "€0.00 / €255.00 · €255.00 left")),
+            ],
+            updatedAt: now)
+        let metadata = try #require(ProviderDefaults.metadata[.mistral])
+
+        let model = UsageMenuCardView.Model.make(.init(
+            provider: .mistral,
+            metadata: metadata,
+            snapshot: snapshot,
+            credits: nil,
+            creditsError: nil,
+            dashboardError: nil,
+            tokenSnapshot: nil,
+            tokenError: nil,
+            account: AccountInfo(email: nil, plan: nil),
+            isRefreshing: false,
+            lastError: nil,
+            usageBarsShowUsed: false,
+            resetTimeDisplayStyle: .countdown,
+            tokenCostUsageEnabled: false,
+            costSummaryInlineEnabled: true,
+            showOptionalCreditsAndExtraUsage: true,
+            hidePersonalInfo: false,
+            now: now))
+
+        let monthlyPlan = try #require(model.metrics.first { $0.id == "mistral-monthly-plan" })
+        #expect(monthlyPlan.detailText == "€0.00 / €255.00 · €255.00 left")
+        #expect(monthlyPlan.resetText?.hasPrefix("Resets") == true)
     }
 }

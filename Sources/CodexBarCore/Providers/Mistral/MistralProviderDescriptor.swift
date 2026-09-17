@@ -20,10 +20,14 @@ public enum MistralProviderDescriptor {
         #endif
     }
 
+    public static func primaryLabel(window: RateWindow?) -> String? {
+        window == nil ? nil : "Included API"
+    }
+
     static func makeDescriptor() -> ProviderDescriptor {
         ProviderDescriptor(
             id: .mistral,
-            menuBarMetrics: ProviderMenuBarMetricCapabilities(supported: [.automatic, .monthlyPlan]),
+            menuBarMetrics: ProviderMenuBarMetricCapabilities(supported: [.automatic, .primary, .monthlyPlan]),
             settingsSection: .init(MistralProviderSettingsKey.self, cookieSettings: MistralProviderSettings.self),
             credentials: self.credentials,
             metadata: ProviderMetadata(
@@ -176,7 +180,19 @@ struct MistralWebFetchStrategy: ProviderFetchStrategy {
             timeout: timeout,
             transport: transport)
         var remaining = deadline.timeIntervalSinceNow
-        let vibeResult: MistralUsageFetcher.MistralVibeUsageResult? = if let csrfToken, remaining > 0 {
+        let budgets: MistralSubscriptionBudgets? = if remaining > 0 {
+            try await Self.fetchOptionalSubscriptionBudgets(
+                cookieHeader: cookieHeader,
+                timeout: min(remaining, 4),
+                transport: transport)
+        } else {
+            nil
+        }
+        remaining = deadline.timeIntervalSinceNow
+        let vibeResult: MistralUsageFetcher.MistralVibeUsageResult? = if budgets?.vibe == nil,
+                                                                       let csrfToken,
+                                                                       remaining > 0
+        {
             try await Self.fetchOptionalVibeUsage(
                 csrfToken: csrfToken,
                 cookieHeader: cookieHeader,
@@ -195,7 +211,30 @@ struct MistralWebFetchStrategy: ProviderFetchStrategy {
         } else {
             nil
         }
-        return Self.attachVibeWindow(to: snapshot.with(credits: credits).toUsageSnapshot(), vibeResult: vibeResult)
+        var result = snapshot.with(credits: credits).toUsageSnapshot()
+        if let budgets {
+            result = Self.attachSubscriptionBudgets(to: result, budgets: budgets)
+        }
+        return Self.attachVibeWindow(to: result, vibeResult: vibeResult)
+    }
+
+    static func fetchOptionalSubscriptionBudgets(
+        cookieHeader: String,
+        timeout: TimeInterval,
+        transport: ProviderHTTPTransport = ProviderHTTPClient.shared) async throws
+        -> MistralSubscriptionBudgets?
+    {
+        do {
+            return try await MistralUsageFetcher.fetchSubscriptionBudgets(
+                cookieHeader: cookieHeader,
+                timeout: timeout,
+                transport: transport)
+        } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled || Task.isCancelled {
+                throw CancellationError()
+            }
+            return nil
+        }
     }
 
     static func fetchOptionalCredits(
@@ -238,6 +277,39 @@ struct MistralWebFetchStrategy: ProviderFetchStrategy {
             }
             return nil
         }
+    }
+
+    static func attachSubscriptionBudgets(
+        to usageSnapshot: UsageSnapshot,
+        budgets: MistralSubscriptionBudgets) -> UsageSnapshot
+    {
+        let apiWindow = RateWindow(
+            usedPercent: budgets.api.usagePercentage,
+            windowMinutes: nil,
+            resetsAt: budgets.api.resetsAt,
+            resetDescription: Self.budgetDescription(budgets.api))
+        var extraWindows = usageSnapshot.extraRateWindows?.filter { $0.id != "mistral-monthly-plan" } ?? []
+        if let vibe = budgets.vibe {
+            let vibeWindow = RateWindow(
+                usedPercent: vibe.usagePercentage,
+                windowMinutes: nil,
+                resetsAt: vibe.resetsAt,
+                resetDescription: Self.budgetDescription(vibe))
+            extraWindows.append(NamedRateWindow(
+                id: "mistral-monthly-plan",
+                title: "Monthly Plan",
+                window: vibeWindow))
+        }
+        return usageSnapshot
+            .with(primary: apiWindow, secondary: usageSnapshot.secondary)
+            .with(extraRateWindows: extraWindows)
+    }
+
+    private static func budgetDescription(_ budget: MistralSubscriptionBudget) -> String {
+        let used = UsageFormatter.currencyString(budget.usedAmount, currencyCode: budget.currencyCode)
+        let limit = UsageFormatter.currencyString(budget.limit, currencyCode: budget.currencyCode)
+        let remaining = UsageFormatter.currencyString(budget.remainingAmount, currencyCode: budget.currencyCode)
+        return "\(used) / \(limit) · \(UsageFormatter.remainingString(from: remaining))"
     }
 
     static func attachVibeWindow(

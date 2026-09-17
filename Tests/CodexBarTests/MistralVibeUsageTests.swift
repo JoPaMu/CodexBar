@@ -241,6 +241,7 @@ struct MistralVibeUsageTests {
         #expect(snapshot.mistralUsage?.credits == nil)
         #expect(requestLog.paths == [
             "admin.mistral.ai/api/billing/v2/usage",
+            "admin.mistral.ai/subscription",
             "console.mistral.ai/api-ui/trpc/billing.vibeUsage",
             "admin.mistral.ai/api/billing/credits",
         ])

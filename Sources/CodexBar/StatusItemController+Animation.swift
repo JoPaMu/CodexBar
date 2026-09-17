@@ -879,8 +879,14 @@ extension StatusItemController {
         let usesBalance = switch provider {
         case .openrouter: preference == .automatic
         case .mistral:
-            preference != .monthlyPlan
-                || snapshot?.extraRateWindows?.contains { $0.id == "mistral-monthly-plan" } != true
+            switch preference {
+            case .primary:
+                snapshot?.primary == nil
+            case .monthlyPlan:
+                snapshot?.extraRateWindows?.contains { $0.id == "mistral-monthly-plan" } != true
+            default:
+                true
+            }
         default: true
         }
         if usesBalance, let balance = Self.menuBarBalanceDisplayText(provider: provider, snapshot: snapshot) {
