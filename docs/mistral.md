@@ -51,6 +51,8 @@ For the console request, CodexBar forwards only the `csrftoken` and `ory_session
   from the included allowance and any pay-as-you-go spend.
 - Daily usage buckets feed the inline usage dashboard.
 - The provider card can show credit balance when the credits endpoint returns it.
+- Allowance amounts derive from Mistral's reported percentage and allowance size, independently of billed API spend. Zero or malformed allowances are omitted without discarding a valid sibling allowance.
+- The Automatic menu bar selection retains API spend; Included API and Monthly Plan select their respective quota percentages.
 - Token-cost history is supported through the billing web session; no local log scan is used.
 - Unrepresentable billing token totals fail parsing instead of crashing. Display-only model rankings omit an
   overflowing total while retaining valid cost data.

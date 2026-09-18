@@ -1,5 +1,5 @@
 ---
-summary: "OpenRouter provider: API key credits, rate limits, and daily/weekly/monthly spend."
+summary: "OpenRouter provider: API key credits, spending caps, and daily/weekly/monthly spend."
 read_when:
   - Debugging OpenRouter API key usage or spend parsing
   - Updating OpenRouter credits or key-limit display
@@ -64,6 +64,8 @@ CodexBar keeps any valid balance and labels the API key limit as unavailable wit
 or response diagnostic.
 
 Activity history uses the separately configured Management API key and is optional. Malformed activity, including a combined input/output token total outside the safe integer range, leaves valid credits and key quota available and marks history unavailable.
+Reported reasoning counts are retained separately, including when they exceed completion counts. Token totals remain prompt plus completion; reasoning is not added a second time.
+Successful HTTP responses that fail JSON parsing or validation are labeled “Response was invalid.” Network failures retain “Request failed” or “Request timed out”; HTTP errors retain their status-specific diagnostic. These optional failures preserve usable data from the other endpoints.
 
 ## Display
 
@@ -76,6 +78,8 @@ The OpenRouter menu card shows:
 - **Spend chart**: Day/week/month spend can reuse the shared inline dashboard when enough history is available
 - **Balance**: Displayed in the identity section as "Balance: $X.XX" when the credits request succeeds
 
+Shared usage cards and copied statistics group recognized gateway model identifiers such as `openai/gpt-4o` under public family labels such as “GPT,” with usage attributed to OpenRouter. Raw namespaces and model names are omitted; shared model rankings still require complete eligible history.
+
 The **API key limit** is a spending cap, not your prepaid account balance. Configured positive limits show
 “Spending cap, not balance” beneath the amount. Both values remain visible even when the cap exceeds the balance:
 a $30 key limit with $30 remaining is **100% left**, independently of a $1.90 account balance from $5 in credits
@@ -86,6 +90,7 @@ Without a configured limit, the detail row says “No limit configured” and no
 key enrichment retains its diagnostic and account balance. CLI text and JSON detail strings use the same limit
 label and disclosure; the JSON structure is unchanged.
 Settings still shows the returned daily, weekly, and monthly key spend when the API key has no configured limit.
+The deprecated Current Key API `rate_limit` field is ignored, including malformed values, so it cannot hide valid quota or spend details.
 
 ## CLI Usage
 

@@ -1,19 +1,18 @@
 import Foundation
 
-struct MistralSubscriptionBudgets: Codable, Equatable, Hashable, Sendable {
-    let api: MistralSubscriptionBudget
+struct MistralSubscriptionBudgets: Hashable, Sendable {
+    let api: MistralSubscriptionBudget?
     let vibe: MistralSubscriptionBudget?
 }
 
-struct MistralSubscriptionBudget: Codable, Equatable, Hashable, Sendable {
+struct MistralSubscriptionBudget: Hashable, Sendable {
     let usagePercentage: Double
     let limit: Double
     let currencyCode: String
     let resetsAt: Date?
-    let payAsYouGoEnabled: Bool
 
     var usedAmount: Double {
-        self.limit * self.usagePercentage / 100
+        self.limit * (self.usagePercentage / 100)
     }
 
     var remainingAmount: Double {
@@ -22,59 +21,41 @@ struct MistralSubscriptionBudget: Codable, Equatable, Hashable, Sendable {
 }
 
 enum MistralSubscriptionBudgetParser {
-    private struct RawBudgets: Decodable, Equatable, Hashable {
-        let vibe: RawBudget?
-        let api: RawBudget
-
-        enum CodingKeys: String, CodingKey {
-            case vibe = "vibe_budget"
-            case api = "api_budget"
-        }
-    }
-
-    private struct RawBudget: Decodable, Equatable, Hashable {
+    private struct RawBudget: Decodable {
         let usagePercentage: Double
         let initialBudget: Double
         let currency: String
         let resetAt: String?
-        let paygEnabled: Bool
 
         enum CodingKeys: String, CodingKey {
             case usagePercentage = "usage_percentage"
             case initialBudget = "initial_budget"
             case currency
             case resetAt = "reset_at"
-            case paygEnabled = "payg_enabled"
         }
     }
 
     enum ParseError: Error, Equatable {
         case budgetNotFound
         case ambiguousBudgets
-        case invalidBudget
+        case invalidRecord
     }
 
     private static let flightPushMarker = Data("self.__next_f.push(".utf8)
+    private static let lengthDelimitedTags = Set("TAOoUSsLlGgMmV".utf8)
 
     static func parse(html: String) throws -> MistralSubscriptionBudgets {
-        let stream = try self.flightChunks(in: html).joined()
-        var matches: [RawBudgets] = []
-        for line in stream.split(separator: "\n", omittingEmptySubsequences: false) {
-            guard let colon = line.firstIndex(of: ":") else { continue }
-            self.collectJSONRoots(in: Data(line[line.index(after: colon)...].utf8)) { root in
-                self.collectBudgets(in: root, into: &matches)
-            }
+        let stream = Data(self.flightChunks(in: html).joined().utf8)
+        var matches: Set<MistralSubscriptionBudgets> = []
+        try self.collectModels(in: stream) { root in
+            self.collectBudgets(in: root, into: &matches)
         }
-
-        let unique = Array(Set(matches))
-        guard let raw = unique.first else { throw ParseError.budgetNotFound }
-        guard unique.count == 1 else { throw ParseError.ambiguousBudgets }
-        return try MistralSubscriptionBudgets(
-            api: self.budget(from: raw.api),
-            vibe: raw.vibe.map { try self.budget(from: $0) })
+        guard let budgets = matches.first else { throw ParseError.budgetNotFound }
+        guard matches.count == 1 else { throw ParseError.ambiguousBudgets }
+        return budgets
     }
 
-    private static func flightChunks(in html: String) throws -> [String] {
+    private static func flightChunks(in html: String) -> [String] {
         let data = Data(html.utf8)
         var cursor = data.startIndex
         var chunks: [String] = []
@@ -107,33 +88,52 @@ enum MistralSubscriptionBudgetParser {
         return chunks
     }
 
-    private static func collectJSONRoots(in data: Data, body: (Any) -> Void) {
+    private static func collectModels(in data: Data, body: (Any) -> Void) throws {
         var cursor = data.startIndex
         while cursor < data.endIndex {
-            guard let start = data[cursor...].firstIndex(where: {
-                $0 == UInt8(ascii: "[") || $0 == UInt8(ascii: "{")
-            }) else {
-                return
+            let lineEnd = data[cursor...].firstIndex(of: UInt8(ascii: "\n")) ?? data.endIndex
+            guard let colon = data[cursor..<lineEnd].firstIndex(of: UInt8(ascii: ":")),
+                  colon > cursor,
+                  data[cursor..<colon].allSatisfy(self.isHexDigit)
+            else {
+                cursor = lineEnd < data.endIndex ? data.index(after: lineEnd) : lineEnd
+                continue
             }
-            guard let end = self.jsonContainerEnd(in: data, from: start) else { return }
-            let candidate = data.subdata(in: start..<end)
-            if let root = try? JSONSerialization.jsonObject(with: candidate) {
+            let start = data.index(after: colon)
+            if start < lineEnd, self.lengthDelimitedTags.contains(data[start]) {
+                guard let comma = data[start..<lineEnd].firstIndex(of: UInt8(ascii: ",")) else {
+                    throw ParseError.invalidRecord
+                }
+                let lengthBytes = data[data.index(after: start)..<comma]
+                // Text/binary Flight rows are byte-counted and can contain fake JSON rows and newlines.
+                let payloadStart = data.index(after: comma)
+                guard !lengthBytes.isEmpty, lengthBytes.allSatisfy(self.isHexDigit),
+                      let lengthString = String(bytes: lengthBytes, encoding: .utf8),
+                      let length = Int(lengthString, radix: 16),
+                      length <= data.distance(from: payloadStart, to: data.endIndex)
+                else { throw ParseError.invalidRecord }
+                cursor = data.index(payloadStart, offsetBy: length)
+                continue
+            }
+            if start < lineEnd, data[start] == UInt8(ascii: "[") || data[start] == UInt8(ascii: "{") {
+                guard let root = try? JSONSerialization.jsonObject(with: data.subdata(in: start..<lineEnd)) else {
+                    throw ParseError.invalidRecord
+                }
                 body(root)
-                cursor = end
-            } else {
-                cursor = data.index(after: start)
             }
+            cursor = lineEnd < data.endIndex ? data.index(after: lineEnd) : lineEnd
         }
     }
 
-    private static func collectBudgets(in value: Any, into results: inout [RawBudgets]) {
+    private static func collectBudgets(in value: Any, into results: inout Set<MistralSubscriptionBudgets>) {
         if let dictionary = value as? [String: Any] {
-            if let budget = dictionary["budget"] as? [String: Any],
-               JSONSerialization.isValidJSONObject(budget),
-               let data = try? JSONSerialization.data(withJSONObject: budget),
-               let decoded = try? JSONDecoder().decode(RawBudgets.self, from: data)
-            {
-                results.append(decoded)
+            if let raw = dictionary["budget"] as? [String: Any] {
+                let budgets = MistralSubscriptionBudgets(
+                    api: self.budget(from: raw["api_budget"]),
+                    vibe: self.budget(from: raw["vibe_budget"]))
+                if budgets.api != nil || budgets.vibe != nil {
+                    results.insert(budgets)
+                }
             }
             for child in dictionary.values {
                 self.collectBudgets(in: child, into: &results)
@@ -146,7 +146,6 @@ enum MistralSubscriptionBudgetParser {
     }
 
     private static func jsonContainerEnd(in data: Data, from start: Data.Index) -> Data.Index? {
-        guard start < data.endIndex else { return nil }
         var expectedClosers: [UInt8] = []
         var inString = false
         var escaped = false
@@ -182,22 +181,25 @@ enum MistralSubscriptionBudgetParser {
         return nil
     }
 
-    private static func budget(from raw: RawBudget) throws -> MistralSubscriptionBudget {
+    private static func budget(from value: Any?) -> MistralSubscriptionBudget? {
+        guard let dictionary = value as? [String: Any],
+              let data = try? JSONSerialization.data(withJSONObject: dictionary),
+              let raw = try? JSONDecoder().decode(RawBudget.self, from: data)
+        else { return nil }
         let currency = raw.currency.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        guard raw.usagePercentage.isFinite,
-              raw.usagePercentage >= 0,
-              raw.initialBudget.isFinite,
-              raw.initialBudget >= 0,
-              !currency.isEmpty
-        else {
-            throw ParseError.invalidBudget
-        }
-        return MistralSubscriptionBudget(
+        guard raw.usagePercentage.isFinite, raw.usagePercentage >= 0,
+              raw.initialBudget.isFinite, raw.initialBudget > 0, !currency.isEmpty
+        else { return nil }
+        let budget = MistralSubscriptionBudget(
             usagePercentage: raw.usagePercentage,
             limit: raw.initialBudget,
             currencyCode: currency,
-            resetsAt: ISO8601DateParser.parse(raw.resetAt),
-            payAsYouGoEnabled: raw.paygEnabled)
+            resetsAt: ISO8601DateParser.parse(raw.resetAt))
+        return budget.usedAmount.isFinite ? budget : nil
+    }
+
+    private static func isHexDigit(_ byte: UInt8) -> Bool {
+        (48...57).contains(byte) || (65...70).contains(byte) || (97...102).contains(byte)
     }
 
     private static func isWhitespace(_ byte: UInt8) -> Bool {

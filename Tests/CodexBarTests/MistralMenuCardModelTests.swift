@@ -5,6 +5,45 @@ import Testing
 
 struct MistralMenuCardModelTests {
     @Test
+    @MainActor
+    func `allowance labels reach legacy menus and widgets`() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let settings = testSettingsStore(
+            suiteName: #function, userDefaults: InMemoryUserDefaults(), config: testConfigWithAllProvidersDisabled())
+        let store = UsageStore(
+            fetcher: UsageFetcher(environment: [:]),
+            browserDetection: BrowserDetection(homeDirectory: root.path, fileExists: { _ in false }),
+            settings: settings,
+            startupBehavior: .testing,
+            environmentBase: [:],
+            widgetSnapshotURL: root.appendingPathComponent("widget.json"))
+        store._setSnapshotForTesting(UsageSnapshot(
+            primary: RateWindow(usedPercent: 20, windowMinutes: nil, resetsAt: nil, resetDescription: nil),
+            secondary: nil,
+            updatedAt: Date()), provider: .mistral)
+        let descriptor = MenuDescriptor.build(
+            provider: .mistral,
+            store: store,
+            settings: settings,
+            account: AccountInfo(email: nil, plan: nil),
+            updateReady: false,
+            includeContextualActions: false)
+        let lines = descriptor.sections.flatMap(\.entries).compactMap { entry -> String? in
+            guard case let .text(text, _) = entry else { return nil }
+            return text
+        }
+        #expect(lines.contains { $0.contains("Included API") })
+        var saved: WidgetSnapshot?
+        store._test_widgetSnapshotSaveOverride = { saved = $0 }
+        defer { store._test_widgetSnapshotSaveOverride = nil }
+        store.persistWidgetSnapshot(reason: "mistral-allowance-label-test")
+        await store.widgetSnapshotPersistTask?.value
+        let entry = try #require(saved?.entries.first { $0.provider == .mistral })
+        #expect(entry.usageRows?.first?.title == "Included API")
+        #expect(entry.usageRows?.first?.percentLeft == 80)
+    }
+
+    @Test
     func `mistral credit balance renders like deepseek balance`() throws {
         let now = Date()
         let credits = MistralCreditsSnapshot(
@@ -203,8 +242,8 @@ struct MistralMenuCardModelTests {
         #expect(primary.resetText?.hasPrefix("Resets") == true)
     }
 
-    @Test
-    func `mistral monthly plan shows included amount detail`() throws {
+    @Test(arguments: [false, true])
+    func `mistral monthly plan shows included amount detail`(hasReset: Bool) throws {
         let now = Date()
         let snapshot = UsageSnapshot(
             primary: nil,
@@ -216,7 +255,7 @@ struct MistralMenuCardModelTests {
                     window: RateWindow(
                         usedPercent: 0,
                         windowMinutes: nil,
-                        resetsAt: now.addingTimeInterval(3 * 24 * 60 * 60),
+                        resetsAt: hasReset ? now.addingTimeInterval(3 * 24 * 60 * 60) : nil,
                         resetDescription: "€0.00 / €255.00 · €255.00 left")),
             ],
             updatedAt: now)
@@ -244,6 +283,6 @@ struct MistralMenuCardModelTests {
 
         let monthlyPlan = try #require(model.metrics.first { $0.id == "mistral-monthly-plan" })
         #expect(monthlyPlan.detailText == "€0.00 / €255.00 · €255.00 left")
-        #expect(monthlyPlan.resetText?.hasPrefix("Resets") == true)
+        #expect(monthlyPlan.resetText?.hasPrefix("Resets") == (hasReset ? true : nil))
     }
 }

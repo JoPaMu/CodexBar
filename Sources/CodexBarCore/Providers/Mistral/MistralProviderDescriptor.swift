@@ -20,10 +20,6 @@ public enum MistralProviderDescriptor {
         #endif
     }
 
-    private static func primaryLabel(window: RateWindow?) -> String? {
-        window == nil ? nil : "Included API"
-    }
-
     static func makeDescriptor() -> ProviderDescriptor {
         ProviderDescriptor(
             id: .mistral,
@@ -44,7 +40,6 @@ public enum MistralProviderDescriptor {
                 defaultEnabled: false,
                 isPrimaryProvider: false,
                 usesAccountFallback: false,
-                balanceOnly: true,
                 usesDetailBackedWindow: true,
                 browserCookieOrder: self.browserCookieOrder,
                 dashboardURL: "https://admin.mistral.ai/organization/usage",
@@ -65,28 +60,36 @@ public enum MistralProviderDescriptor {
                 menuHintLines: [.literal("Reported by Mistral billing usage.")],
                 showsCostMenuSection: false,
                 primaryValue: .latestDaily),
-            presentation: ProviderUsagePresentation(rateWindowLabeler: { metadata, snapshot, _ in
-                ProviderRateWindowLabels(
-                    primary: Self.primaryLabel(window: snapshot.primary) ?? metadata.sessionLabel,
-                    secondary: metadata.weeklyLabel,
-                    tertiary: metadata.opusLabel ?? "Sonnet",
-                    showsTertiary: metadata.supportsOpus)
-            }, menuBarWindowResolver: { context in
-                guard context.metric == .monthlyPlan else { return .unhandled }
-                return .resolved(context.snapshot.extraRateWindows?.first {
-                    $0.id == "mistral-monthly-plan"
-                }?.window)
-            }, menuCard: ProviderMenuCardPresentation(
-                usesProviderCostHistoryAsPrimaryDashboard: true,
-                primaryCostHistoryResolver: { snapshot, tokenSnapshot in
-                    if let projected = snapshot?.mistralUsage?.toCostUsageTokenSnapshot() {
-                        return projected
-                    }
-                    return snapshot == nil ? tokenSnapshot : nil
+            presentation: ProviderUsagePresentation(
+                rateWindowLabeler: { metadata, snapshot, _ in
+                    ProviderRateWindowLabels(
+                        primary: snapshot.primary == nil ? metadata.sessionLabel : "Included API",
+                        secondary: metadata.weeklyLabel,
+                        tertiary: metadata.opusLabel ?? "Sonnet",
+                        showsTertiary: metadata.supportsOpus)
                 },
-                showsPrimaryBalanceDescription: true,
-                hidesPrimaryResetWithoutDate: true,
-                extraRateWindowUsesResetDescriptionAsDetail: { $0.id == "mistral-monthly-plan" })),
+                menuBarLayoutPrimaryLabel: "Included API",
+                menuBarWindowResolver: { context in
+                    switch context.metric {
+                    case .automatic:
+                        .resolved(nil)
+                    case .monthlyPlan:
+                        .resolved(context.snapshot.extraRateWindows?.first { $0.id == "mistral-monthly-plan" }?.window)
+                    default:
+                        .unhandled
+                    }
+                }, menuCard: ProviderMenuCardPresentation(
+                    usesProviderCostHistoryAsPrimaryDashboard: true,
+                    primaryCostHistoryResolver: { snapshot, tokenSnapshot in
+                        if let projected = snapshot?.mistralUsage?.toCostUsageTokenSnapshot() {
+                            return projected
+                        }
+                        return snapshot == nil ? tokenSnapshot : nil
+                    },
+                    showsPrimaryBalanceDescription: true,
+                    hidesPrimaryResetWithoutDate: true,
+                    extraRateWindowUsesResetDescriptionAsDetail: { $0.id == "mistral-monthly-plan" }),
+                menu: ProviderMenuDescriptorPresentation(primaryDescriptionIsDetail: { _ in true })),
             fetchPlan: ProviderFetchPlan(
                 sourceModes: [.auto, .web],
                 pipeline: ProviderFetchPipeline(resolveStrategies: { _ in [MistralWebFetchStrategy()] })),
@@ -290,11 +293,13 @@ struct MistralWebFetchStrategy: ProviderFetchStrategy {
         to usageSnapshot: UsageSnapshot,
         budgets: MistralSubscriptionBudgets) -> UsageSnapshot
     {
-        let apiWindow = RateWindow(
-            usedPercent: budgets.api.usagePercentage,
-            windowMinutes: nil,
-            resetsAt: budgets.api.resetsAt,
-            resetDescription: Self.budgetDescription(budgets.api))
+        let apiWindow = budgets.api.map { budget in
+            RateWindow(
+                usedPercent: budget.usagePercentage,
+                windowMinutes: nil,
+                resetsAt: budget.resetsAt,
+                resetDescription: Self.budgetDescription(budget))
+        }
         var extraWindows = usageSnapshot.extraRateWindows?.filter { $0.id != "mistral-monthly-plan" } ?? []
         if let vibe = budgets.vibe {
             let vibeWindow = RateWindow(
