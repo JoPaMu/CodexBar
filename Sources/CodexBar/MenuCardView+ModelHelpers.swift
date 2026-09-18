@@ -560,10 +560,8 @@ extension UsageMenuCardView.Model {
             AlibabaTokenPlanProviderDescriptor.primaryLabel(window: snapshot.primary) ?? input.metadata.sessionLabel
         } else if input.provider == .ollama {
             OllamaProviderDescriptor.primaryLabel(window: snapshot.primary) ?? input.metadata.sessionLabel
-        } else if input.provider == .mistral {
-            MistralProviderDescriptor.primaryLabel(window: snapshot.primary) ?? input.metadata.sessionLabel
         } else {
-            input.metadata.sessionLabel
+            Self.derivedPrimaryRateWindowLabel(input: input, snapshot: snapshot)
         }
         let secondaryLabel = if input.provider == .amp {
             AmpProviderDescriptor.secondaryLabel(snapshot: snapshot) ?? input.metadata.weeklyLabel
@@ -939,9 +937,7 @@ extension UsageMenuCardView.Model {
             let resetText = input.provider == .sub2api && namedWindow.window.resetsAt == nil
                 ? nil
                 : resolvedResetText
-            let detailText: String? = if input.provider == .sub2api
-                || (input.provider == .mistral && namedWindow.id == "mistral-monthly-plan")
-            {
+            let detailText: String? = if Self.showsExtraWindowResetDetail(input, namedWindow) {
                 namedWindow.window.resetDescription
             } else {
                 nil
@@ -1225,5 +1221,17 @@ extension UsageMenuCardView.Model {
             pacePercent: nil,
             paceOnTop: true,
             isPaceDerived: true))
+    }
+
+    /// Primary lane label for providers that publish one through their descriptor's presentation hook.
+    static func derivedPrimaryRateWindowLabel(input: Input, snapshot: UsageSnapshot) -> String {
+        ProviderDescriptorRegistry.descriptor(for: input.provider).presentation
+            .rateWindowLabels(metadata: input.metadata, snapshot: snapshot, now: input.now).primary
+    }
+
+    /// Whether an extra window renders its reset description as the detail line, per descriptor policy.
+    static func showsExtraWindowResetDetail(_ input: Input, _ namedWindow: NamedRateWindow) -> Bool {
+        ProviderDescriptorRegistry.descriptor(for: input.provider).presentation.menuCard
+            .extraRateWindowShowsResetDescriptionAsDetail(namedWindow)
     }
 }

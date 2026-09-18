@@ -22,13 +22,24 @@ private final class MistralSubscriptionRequestCapture: @unchecked Sendable {
 struct MistralSubscriptionBudgetTests {
     private static func flightPush(_ chunk: String) throws -> String {
         let data = try JSONSerialization.data(withJSONObject: [1, chunk])
-        return "<script>self.__next_f.push(\(String(decoding: data, as: UTF8.self)))</script>"
+        let encoded = String(bytes: data, encoding: .utf8) ?? ""
+        return "<script>self.__next_f.push(\(encoded))</script>"
     }
+
+    /// A single-budget flight record with only an `api_budget`.
+    private static let apiOnlyRecord = // swiftlint:disable:next line_length
+        #"7:["$",null,null,{"budget":{"api_budget":{"usage_percentage":1.1,"initial_budget":25.5,"currency":"eur","reset_at":"2026-10-01T00:00:00.000Z","payg_enabled":true}}}]"# +
+        "\n"
+
+    /// A full flight record with both `api_budget` and `vibe_budget`.
+    private static let fullRecord = // swiftlint:disable:next line_length
+        #"7:["$","$L1",null,{"budget":{"api_budget":{"usage_percentage":2.0,"initial_budget":25.5,"currency":"eur","reset_at":"2026-10-01T00:00:00.000Z","payg_enabled":false},"vibe_budget":{"usage_percentage":0.0,"initial_budget":255.0,"currency":"eur","reset_at":"2026-10-01T00:00:00.000Z","payg_enabled":false}}}]"# +
+        "\n"
+
     @Test
     func `parses API allowance from subscription flight payload`() throws {
-        let html = #"""
-        <script>self.__next_f.push([1,"7:[\"$\",\"$L1\",null,{\"budget\":{\"vibe_budget\":{\"usage_percentage\":0.0,\"initial_budget\":255.0,\"currency\":\"eur\",\"reset_at\":\"2026-10-01T00:00:00.000Z\",\"payg_enabled\":false},\"api_budget\":{\"usage_percentage\":2.0,\"initial_budget\":25.5,\"currency\":\"eur\",\"reset_at\":\"2026-10-01T00:00:00.000Z\",\"payg_enabled\":false}}}]"])</script>
-        """#
+        // The escaped-HTML form mirrors what the browser actually ships; `fullRecord` is the raw record.
+        let html = try Self.flightPush(Self.fullRecord)
 
         let result = try MistralSubscriptionBudgetParser.parse(html: html)
 
@@ -40,24 +51,23 @@ struct MistralSubscriptionBudgetTests {
         #expect(result.api.payAsYouGoEnabled == false)
         let expectedReset = try #require(ISO8601DateParser.parse("2026-10-01T00:00:00.000Z"))
         #expect(result.api.resetsAt == expectedReset)
-        let expectedVibeReset = try #require(ISO8601DateParser.parse("2026-10-01T00:00:00.000Z"))
-        #expect(try #require(result.vibe).resetsAt == expectedVibeReset)
+        #expect(try #require(result.vibe).resetsAt == expectedReset)
     }
 
     @Test
     func `parses API allowance when Vibe allowance is absent`() throws {
-        let html = try Self.flightPush(
-            #"7:["$",null,null,{"budget":{"api_budget":{"usage_percentage":1.1,"initial_budget":25.5,"currency":"eur","reset_at":"2026-10-01T00:00:00.000Z","payg_enabled":true}}}]\n"#)
+        let html = try Self.flightPush(Self.apiOnlyRecord)
 
         let result = try MistralSubscriptionBudgetParser.parse(html: html)
 
         #expect(result.api.usagePercentage == 1.1)
         #expect(result.api.limit == 25.5)
+        #expect(result.vibe == nil)
     }
 
     @Test
     func `reassembles subscription budget split across flight pushes`() throws {
-        let record = #"7:["$","$L1",null,{"budget":{"api_budget":{"usage_percentage":2.0,"initial_budget":25.5,"currency":"eur","reset_at":"2026-10-01T00:00:00.000Z","payg_enabled":false},"vibe_budget":{"usage_percentage":0.0,"initial_budget":255.0,"currency":"eur","reset_at":"2026-10-01T00:00:00.000Z","payg_enabled":false}}}]\n"#
+        let record = Self.fullRecord
         let split = record.index(record.startIndex, offsetBy: record.count / 2)
         let html = try Self.flightPush(String(record[..<split]))
             + Self.flightPush(String(record[split...]))
@@ -70,8 +80,7 @@ struct MistralSubscriptionBudgetTests {
 
     @Test
     func `subscription request fetches authenticated budget page`() async throws {
-        let record = #"7:["$","$L1",null,{"budget":{"api_budget":{"usage_percentage":2.0,"initial_budget":25.5,"currency":"eur","reset_at":"2026-10-01T00:00:00.000Z","payg_enabled":false},"vibe_budget":{"usage_percentage":0.0,"initial_budget":255.0,"currency":"eur","reset_at":"2026-10-01T00:00:00.000Z","payg_enabled":false}}}]\n"#
-        let data = Data(try Self.flightPush(record).utf8)
+        let data = try Data(Self.flightPush(Self.fullRecord).utf8)
         let capture = MistralSubscriptionRequestCapture()
         let transport = ProviderHTTPTransportHandler { request in
             capture.record(request)
@@ -100,7 +109,7 @@ struct MistralSubscriptionBudgetTests {
 
     @Test
     func `subscription budgets become API and Vibe windows`() throws {
-        let html = try Self.flightPush(#"7:["$",null,null,{"budget":{"api_budget":{"usage_percentage":2.0,"initial_budget":25.5,"currency":"eur","reset_at":"2026-10-01T00:00:00.000Z","payg_enabled":false},"vibe_budget":{"usage_percentage":0.0,"initial_budget":255.0,"currency":"eur","reset_at":"2026-10-01T00:00:00.000Z","payg_enabled":false}}}]\n"#)
+        let html = try Self.flightPush(Self.fullRecord)
         let budgets = try MistralSubscriptionBudgetParser.parse(html: html)
         let existing = NamedRateWindow(
             id: "existing",
@@ -126,14 +135,36 @@ struct MistralSubscriptionBudgetTests {
     @Test
     func `Mistral exposes included API as a selectable primary metric`() {
         let descriptor = MistralProviderDescriptor.descriptor
-
-        #expect(descriptor.menuBarMetrics.supports(.primary))
-        #expect(MistralProviderDescriptor.primaryLabel(window: RateWindow(
-            usedPercent: 2,
+        let budgetWindow = RateWindow(
+            usedPercent: 1.1,
             windowMinutes: nil,
             resetsAt: nil,
-            resetDescription: nil)) == "Included API")
-        #expect(MistralProviderDescriptor.primaryLabel(window: nil) == nil)
+            resetDescription: "€0.28 / €25.50 · €25.22 left")
+
+        #expect(descriptor.menuBarMetrics.supports(.primary))
         #expect(descriptor.metadata.sessionLabel == "Balance")
+        #expect(descriptor.presentation.rateWindowLabels(
+            metadata: descriptor.metadata,
+            snapshot: UsageSnapshot(primary: budgetWindow, secondary: nil, updatedAt: Date()))
+            .primary == "Included API")
+        #expect(descriptor.presentation.rateWindowLabels(
+            metadata: descriptor.metadata,
+            snapshot: UsageSnapshot(primary: nil, secondary: nil, updatedAt: Date()))
+            .primary == "Balance")
+    }
+
+    @Test
+    func `Mistral renders only its own allowance window as a detail line`() {
+        let menuCard = MistralProviderDescriptor.descriptor.presentation.menuCard
+        let window = RateWindow(usedPercent: 0, windowMinutes: nil, resetsAt: nil, resetDescription: "detail")
+
+        #expect(menuCard.extraRateWindowShowsResetDescriptionAsDetail(NamedRateWindow(
+            id: "mistral-monthly-plan",
+            title: "Monthly Plan",
+            window: window)))
+        #expect(!menuCard.extraRateWindowShowsResetDescriptionAsDetail(NamedRateWindow(
+            id: "other-window",
+            title: "Other",
+            window: window)))
     }
 }

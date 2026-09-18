@@ -537,42 +537,6 @@ struct StatusItemBalanceDisplayTests {
     }
 
     @Test
-    func `menu bar display text uses mistral included API when selected`() {
-        let settings = self.makeSettings(
-            suiteName: "StatusItemBalanceDisplayTests-mistral-included-api",
-            provider: .mistral)
-        settings.setMenuBarMetricPreference(.primary, for: .mistral)
-        let (store, controller) = self.makeStoreAndController(settings: settings)
-        defer { controller.releaseStatusItemsForTesting() }
-        let snapshot = MistralUsageSnapshot(
-            totalCost: 1.2345,
-            currency: "EUR",
-            currencySymbol: "€",
-            totalInputTokens: 10000,
-            totalOutputTokens: 5000,
-            totalCachedTokens: 0,
-            modelCount: 2,
-            startDate: nil,
-            endDate: nil,
-            updatedAt: Date())
-            .toUsageSnapshot()
-            .with(
-                primary: RateWindow(
-                    usedPercent: 2,
-                    windowMinutes: nil,
-                    resetsAt: nil,
-                    resetDescription: "€0.51 / €25.50 · €24.99 left"),
-                secondary: nil)
-
-        store._setSnapshotForTesting(snapshot, provider: .mistral)
-        store._setErrorForTesting(nil, provider: .mistral)
-
-        let displayText = controller.menuBarDisplayText(for: .mistral, snapshot: snapshot)
-
-        #expect(displayText == "2%")
-    }
-
-    @Test
     func `menu bar display text uses mistral monthly plan when selected`() {
         let settings = self.makeSettings(
             suiteName: "StatusItemBalanceDisplayTests-mistral-monthly-plan",

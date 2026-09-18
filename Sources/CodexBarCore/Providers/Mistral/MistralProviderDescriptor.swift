@@ -20,7 +20,7 @@ public enum MistralProviderDescriptor {
         #endif
     }
 
-    public static func primaryLabel(window: RateWindow?) -> String? {
+    private static func primaryLabel(window: RateWindow?) -> String? {
         window == nil ? nil : "Included API"
     }
 
@@ -65,7 +65,13 @@ public enum MistralProviderDescriptor {
                 menuHintLines: [.literal("Reported by Mistral billing usage.")],
                 showsCostMenuSection: false,
                 primaryValue: .latestDaily),
-            presentation: ProviderUsagePresentation(menuBarWindowResolver: { context in
+            presentation: ProviderUsagePresentation(rateWindowLabeler: { metadata, snapshot, _ in
+                ProviderRateWindowLabels(
+                    primary: Self.primaryLabel(window: snapshot.primary) ?? metadata.sessionLabel,
+                    secondary: metadata.weeklyLabel,
+                    tertiary: metadata.opusLabel ?? "Sonnet",
+                    showsTertiary: metadata.supportsOpus)
+            }, menuBarWindowResolver: { context in
                 guard context.metric == .monthlyPlan else { return .unhandled }
                 return .resolved(context.snapshot.extraRateWindows?.first {
                     $0.id == "mistral-monthly-plan"
@@ -79,7 +85,8 @@ public enum MistralProviderDescriptor {
                     return snapshot == nil ? tokenSnapshot : nil
                 },
                 showsPrimaryBalanceDescription: true,
-                hidesPrimaryResetWithoutDate: true)),
+                hidesPrimaryResetWithoutDate: true,
+                extraRateWindowUsesResetDescriptionAsDetail: { $0.id == "mistral-monthly-plan" })),
             fetchPlan: ProviderFetchPlan(
                 sourceModes: [.auto, .web],
                 pipeline: ProviderFetchPipeline(resolveStrategies: { _ in [MistralWebFetchStrategy()] })),
@@ -190,8 +197,8 @@ struct MistralWebFetchStrategy: ProviderFetchStrategy {
         }
         remaining = deadline.timeIntervalSinceNow
         let vibeResult: MistralUsageFetcher.MistralVibeUsageResult? = if budgets?.vibe == nil,
-                                                                       let csrfToken,
-                                                                       remaining > 0
+                                                                         let csrfToken,
+                                                                         remaining > 0
         {
             try await Self.fetchOptionalVibeUsage(
                 csrfToken: csrfToken,
